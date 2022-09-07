@@ -1,0 +1,10 @@
+name: visual-odometry 
+channels:
+  - defaults
+dependencies:
+  - python=3.9.12
+  - wget
+  - pip:
+    - numpy
+    - opencv-python
+    - pykitti
