@@ -9,3 +9,5 @@ dependencies:
     - numpy
     - opencv-python
     - pykitti
+    - jupyter
+    - jupyterlab
