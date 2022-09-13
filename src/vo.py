@@ -39,6 +39,8 @@ class VO:
 		if len(self.frames) > 2:		
 			# roll off old frames
 			self.frames = self.frames[1:]
+			self.keypoints = self.keypoints[1:]
+			self.descriptors = self.descriptors[1:]
 
 
 
