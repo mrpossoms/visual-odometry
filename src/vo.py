@@ -1,122 +1,6 @@
 import cv2
 import numpy as np
 
-class Pinhole:
-	def __init__(self, sensor: np.array, receptor_size_m=0.0001, focal_length_m=0.005):
-		self._f = focal_length_m
-		self._cam_transform = np.eye(4)
-		self._world_transform = np.eye(4)
-		self._sensor = sensor
-		self.sensor_dims = np.array(sensor.shape[:2]) * receptor_size_m
-		assert(self.sensor_dims.size == 2)
-		self._receptor_dims = np.array([receptor_size_m, receptor_size_m])
-		self._sensor_extents = [
-			-self.sensor_dims / 2,
-			self.sensor_dims / 2,
-		]
-
-
-	def projection(self) -> np.array:
-		return np.array([
-			[1,   0,         0, 0],
-			[0,   1,         0, 0],
-			[0,   0,         1, 0],
-			[0,   0,-1/self._f, 0],
-		])
-
-	def project_onto_sensor(self, p: np.array) -> np.array:
-		# project 3d point onto sensor plane to get pixel coordinates
-		p_prime = np.matmul(self._cam_transform, np.append(p, [1]))
-		p_prime = np.matmul(self.projection(), p_prime)
-		
-		if p_prime[2] <= 0:
-			return None
-
-		p_prime /= p_prime[3]
-		sensor_plane_pos = p_prime[:2]
-
-		# dimensionality constraint checks
-		assert(sensor_plane_pos.size == 2)
-		assert(self._sensor_extents[0].size == 2)
-
-		sensor_coord = ((sensor_plane_pos - self._sensor_extents[0]) / self.sensor_dims) * np.array(self._sensor.shape[:2])
-
-		# bounds check
-		if ((sensor_coord[0] < 0 or sensor_coord[1] < 0) or
-		    (sensor_coord[0] >= self._sensor.shape[0] or sensor_coord[1] >= self._sensor.shape[1])):
-			return None
-
-		return sensor_coord.astype(int)
-
-	def project(self, p: np.array, c: np.array):
-		sensor_coord = self.project_onto_sensor(p)
-
-		if sensor_coord is not None and c is not None:
-			self._sensor[sensor_coord[1], sensor_coord[0]] = c
-
-		return sensor_coord
-
-	def set_transform(self, transform: np.array):
-		self._world_transform = transform
-		self._cam_transform = np.linalg.inv(transform)
-
-	def set_frame(self, frame: np.array):
-		self._sensor = frame
-
-	def aperture_in_world(self, transform=None) -> np.array:
-		if transform is None:
-			transform = self._world_transform
-		return np.matmul(transform, np.array([0, 0, 0, 1]))[:3]
-
-	def sensor_origin_in_world(self) -> np.array:
-		return np.matmul(self._world_transform, np.array([0, 0, -self._f, 1]))[:3]
-
-	def sensor_bases_in_world(self, transform=None) -> tuple[np.array, np.array]:
-		# the sensor is a rectangle in the xy plane
-		# with the normal pointing in the -z direction
-		# so the basis vectors are just the first two columns
-		# of the world transform
-		if transform is None:
-			transform = self._world_transform
-
-		return (
-			np.matmul(transform, np.array([1, 0, 0, 0]))[:3],
-			np.matmul(transform, np.array([0, 1, 0, 0]))[:3],
-		)
-
-	def frame_coord_in_world(self, x: int, y: int, transform=None) -> np.array:
-		# x, y are the pixel coordinates of the sensor
-		# we assume the sensor is at (0, 0, -f)
-		# and the camera is looking down the z-axis
-		# so the ray is just the x, y coordinates of the sensor
-		# scaled by the focal length
-		if transform is None:
-			transform = self._world_transform
-		sensor_point = np.array([
-			(x / (self._sensor.shape[0] - 1)) * self.sensor_dims[0] + self._sensor_extents[0][0],
-			(y / (self._sensor.shape[1] - 1)) * self.sensor_dims[1] + self._sensor_extents[0][1],
-			-self._f,
-		]) 
-		return np.matmul(transform, np.append(sensor_point, [1]))[:3]
-
-	def ray(self, x: int, y: int) -> np.array:
-		# x, y are the pixel coordinates of the sensor
-		# we assume the sensor is at (0, 0, -f)
-		# and the camera is looking down the z-axis
-		# so the ray is just the x, y coordinates of the sensor
-		# scaled by the focal length
-		sensor_point = np.array([
-			(x / (self._sensor.shape[0] - 1)) * self.sensor_dims[0] + self._sensor_extents[0][0],
-			(y / (self._sensor.shape[1] - 1)) * self.sensor_dims[1] + self._sensor_extents[0][1],
-			-self._f,
-		]) + self._receptor_dims / 2
-		return -sensor_point / np.linalg.norm(sensor_point)
-
-	def ray_in_world(self, x: int, y: int, transform=None) -> tuple[np.array, np.array]:
-		o = self.frame_coord_in_world(x, y, transform=transform)
-		d = self.aperture_in_world(transform=transform) - o
-		return (o, d)
-
 class VO:
 	def __init__(self, camera):
 		self.camera = camera
@@ -151,22 +35,14 @@ class VO:
 	def append(self, frame, cam_pose, max_distance=None) -> list[np.array]:
 		self.frames += [frame]
 		self.poses += [cam_pose]
-		cand_keypoints, cand_descriptors = self.orb.detectAndCompute(frame, None)
+		# import pdb; pdb.set_trace()
+		keypoints, descriptors = self.orb.detectAndCompute(frame, None)
 
-		if cand_keypoints is None or cand_descriptors is None:
+		if keypoints == () or len(descriptors) == 0:
 			self.point_estimates += [[]]
+			self.keypoints += [[]]
 			self.matches += [[]]
 			return			
-
-		# print(cand_descriptors)
-		# print('---')
-		keypoints, descriptors = [], []
-		for kp, desc in zip(cand_keypoints, cand_descriptors):
-			# print('->' + str(desc))
-			if kp.size > 5:
-				continue
-			keypoints += [kp]
-			descriptors.append(desc)
 
 		self.keypoints += [keypoints]
 		self.descriptors += [np.array(descriptors)]
@@ -317,47 +193,64 @@ def cube(d=1, position=vec(0,0,0), color_for_coord=None):
 
 
 if __name__ == "__main__":
+	import os
 	import argparse
 	from PIL import Image
+	from pinhole import Pinhole
 	arg_parser = argparse.ArgumentParser()
 	arg_parser.add_argument("--output", type=str, default="motion.gif")
 	arg_parser.add_argument("--frames", type=int, default=25)
 	args = arg_parser.parse_args()
-	
-	I = np.zeros((args.frames, 128, 128, 3), dtype=np.uint8)
+		
+	I = np.zeros((args.frames, 128, 128, 3), dtype=np.uint8) * 255
 
-	# verts = [vec(1,1,1) + vec(0, 0, 5), vec(-1,2,1) + vec(0, 0, 10)]
-	verts = cube(d=2, position=vec(0, 0, 10))
+	def cube_colors(v):
+		return (v * 32 + (128 + 32)).astype(np.uint8)
+
+	verts, colors = cube(d=2, position=vec(0, 0, 10), color_for_coord=cube_colors)
+	verts, colors = verts[1:2], colors[1:2]
 
 	dp = vec(0, 0, 0.5)
 	cam = Pinhole(I[0])
 	vo = VO(cam)
 
+	assert(vo.size() == 0)
+
+	noise = (np.random.default_rng().random((32,3,3,3))) # * 32).astype(np.uint8)
+
 	for f in range(args.frames):
-		t = f
-		R = basis(vec(np.cos(np.pi / 4), 0, np.sin(np.pi / 4)), vec(0, 1, 0))
-		cp = dp * t # camera pos
+		cp = dp * (f+4) # camera pos
 		T = translate(cp)
 		cam.set_frame(I[f])
 		cam.set_transform(T)
-		for v in verts:
-			v_prime = xform(v, T)
-			# print(f'actual point: {v}')
-			cam.project(v, np.array([0, 255, 0], dtype=np.uint8))
-			
+
+		# render verts to camera frame
+		for i, (v, c) in enumerate(zip(verts, colors)):
+			coord = cam.project(v, c)
+			if coord is not None:
+				# draw a little patch with noise around the point
+				I[f,coord[1]-1:coord[1]+2,coord[0]-1:coord[0]+2] = (c * noise[i]).astype(np.uint8)       
+
+		# hand the frame and transform to VO instance, produces estimates
 		est_verts = vo.append(I[f], T)
-		print(f'est_verts: {est_verts}')
+
+		# render location of reconstructed verts into frame
 		if est_verts is not None:
 			for v in est_verts:
 				if v is None:
 					continue
-				v_prime = xform(v, T)
-				cam.project(v, np.array([255, 0, 0], dtype=np.uint8))
+				coord = cam.project(v, None)
+				cv2.circle(I[f],(coord[0],coord[1]),5,(255, 128, 0),1)
 
-	imgs = [Image.fromarray(img).resize((256, 256), resample=Image.NEAREST) for img in I]
-	imgs[0].save(args.output, save_all=True, append_images=imgs[1:], duration=300, loop=0)
+		# show_features(I[f], vo.keypoints[f])
+		show_deltas(vo, index=f)
+		
+		cv2.putText(I[f], f"f:{f} kps:{len(vo.keypoints[f])}", (10, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1)
+		
+	imgs = [Image.fromarray(
+		img).resize((256, 256), resample=Image.NEAREST) for img in I]
+	imgs[0].save("motion.gif", save_all=True, append_images=imgs[1:], duration=10, loop=0)
 
-	import os
-
+	os.system("imgcat motion.gif")
 
 	
