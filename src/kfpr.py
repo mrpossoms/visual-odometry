@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from kf import KalmanFilter
 
 def point_from_motion(camera, p_sen_t_1, p_sen_t, pose_t_1, pose_t):
 	if p_sen_t == p_sen_t_1:
@@ -18,7 +19,44 @@ def point_from_motion(camera, p_sen_t_1, p_sen_t, pose_t_1, pose_t):
 	o = r_o_t_1
 	return ray_plane_intersection(r_o_t, r_d_t, o, n)
 
-class VO:
+class Feature:
+	def __init__(self, camera: Pinhole, keypoints: list[cv2.KeyPoint], poses: list[np.array]):
+		assert(len(keypoints) >= 2)
+		assert(len(poses) >= 2)
+
+		self._cam = camera
+		self._keypoints = keypoints
+		self._poses = poses
+
+		x0 = point_from_motion(camera, keypoints[-2].pt, keypoints[-1].pt, poses[-2], poses[-1])
+		assert(x0)
+
+		self._kf = KalmanFilter(
+			F=np.eye(4),
+			B=poses[-1] @ np.linalg.inv(poses[-2]),
+			H=camera.projection(z=1),
+			Q=np.eye(4), # proc noise TDB
+			R=np.eye(2), # meas noise TDB
+			P=np.eye(4), # state est covar TDB
+			x=x0
+			)
+
+	def filter_keypoints(self, keypoints: list[cv2.KeyPoint]) -> list[cv2.KeyPoint]:
+		# Use the state estimate covariance to project an ellipse into the sensor's xy plane
+		# use that ellipse to determine if a keypoint should be considered part of this feature
+		centroid = self._cam.project(self._kf.x)
+		extents = self._cam.project(self._kf.x[:3] + self._kf.P.diagonal[:3]) - centroid
+
+
+		for kp in keypoints:
+			
+
+	def update(self, keypoints: list[cv2.KeyPoint], pose: np.array):
+
+
+
+
+class KFPR:
 	def __init__(self, camera):
 		self.camera = camera
 		self.frames = []
@@ -52,12 +90,10 @@ class VO:
 	def append(self, frame, cam_pose, max_distance=None) -> list[np.array]:
 		self.frames += [frame]
 		self.poses += [cam_pose]
-		# import pdb; pdb.set_trace()
 		keypoints, descriptors = self.orb.detectAndCompute(frame, None)
 
-		if keypoints == () or len(descriptors) == 0:
+		if keypoints is None or descriptors is None:
 			self.point_estimates += [[]]
-			self.keypoints += [[]]
 			self.matches += [[]]
 			return			
 
@@ -91,14 +127,13 @@ class VO:
 
 			p_sen_t_1 = kps_t_1[match.trainIdx].pt			
 			p_sen_t = kps_t[match.queryIdx].pt
-
+			
 			p = point_from_motion(self.camera, p_sen_t_1, p_sen_t, self.poses[-2], self.poses[-1])
 
 			if p is None:
 				continue
 
 			frame_point_estimates.append(p)
-			
 			# if p_sen_t == p_sen_t_1:
 			# 	# print(f"no displacement, can't compute 3D point {p_sen_t}, {p_sen_t_1}")
 			# 	continue
@@ -217,64 +252,47 @@ def cube(d=1, position=vec(0,0,0), color_for_coord=None):
 
 
 if __name__ == "__main__":
-	import os
 	import argparse
 	from PIL import Image
-	from pinhole import Pinhole
 	arg_parser = argparse.ArgumentParser()
 	arg_parser.add_argument("--output", type=str, default="motion.gif")
 	arg_parser.add_argument("--frames", type=int, default=25)
 	args = arg_parser.parse_args()
-		
-	I = np.zeros((args.frames, 128, 128, 3), dtype=np.uint8) * 255
+	
+	I = np.zeros((args.frames, 128, 128, 3), dtype=np.uint8)
 
-	def cube_colors(v):
-		return (v * 32 + (128 + 32)).astype(np.uint8)
-
-	verts, colors = cube(d=2, position=vec(0, 0, 10), color_for_coord=cube_colors)
-	verts, colors = verts[1:2], colors[1:2]
+	# verts = [vec(1,1,1) + vec(0, 0, 5), vec(-1,2,1) + vec(0, 0, 10)]
+	verts = cube(d=2, position=vec(0, 0, 10))
 
 	dp = vec(0, 0, 0.5)
 	cam = Pinhole(I[0])
 	vo = VO(cam)
 
-	assert(vo.size() == 0)
-
-	noise = (np.random.default_rng().random((32,3,3,3))) # * 32).astype(np.uint8)
-
 	for f in range(args.frames):
-		cp = dp * (f+4) # camera pos
+		t = f
+		R = basis(vec(np.cos(np.pi / 4), 0, np.sin(np.pi / 4)), vec(0, 1, 0))
+		cp = dp * t # camera pos
 		T = translate(cp)
 		cam.set_frame(I[f])
 		cam.set_transform(T)
-
-		# render verts to camera frame
-		for i, (v, c) in enumerate(zip(verts, colors)):
-			coord = cam.project(v, c)
-			if coord is not None:
-				# draw a little patch with noise around the point
-				I[f,coord[1]-1:coord[1]+2,coord[0]-1:coord[0]+2] = (c * noise[i]).astype(np.uint8)       
-
-		# hand the frame and transform to VO instance, produces estimates
+		for v in verts:
+			v_prime = xform(v, T)
+			# print(f'actual point: {v}')
+			cam.project(v, np.array([0, 255, 0], dtype=np.uint8))
+			
 		est_verts = vo.append(I[f], T)
-
-		# render location of reconstructed verts into frame
+		print(f'est_verts: {est_verts}')
 		if est_verts is not None:
 			for v in est_verts:
 				if v is None:
 					continue
-				coord = cam.project(v, None)
-				cv2.circle(I[f],(coord[0],coord[1]),5,(255, 128, 0),1)
+				v_prime = xform(v, T)
+				cam.project(v, np.array([255, 0, 0], dtype=np.uint8))
 
-		# show_features(I[f], vo.keypoints[f])
-		show_deltas(vo, index=f)
-		
-		cv2.putText(I[f], f"f:{f} kps:{len(vo.keypoints[f])}", (10, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1)
-		
-	imgs = [Image.fromarray(
-		img).resize((256, 256), resample=Image.NEAREST) for img in I]
-	imgs[0].save("motion.gif", save_all=True, append_images=imgs[1:], duration=10, loop=0)
+	imgs = [Image.fromarray(img).resize((256, 256), resample=Image.NEAREST) for img in I]
+	imgs[0].save(args.output, save_all=True, append_images=imgs[1:], duration=300, loop=0)
 
-	os.system("imgcat motion.gif")
+	import os
+
 
 	

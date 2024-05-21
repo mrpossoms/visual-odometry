@@ -15,15 +15,6 @@ class Pinhole:
 			self.sensor_dims / 2,
 		]
 
-
-	# def projection(self) -> np.array:
-	# 	return np.array([
-	# 		[1,   0,         0, 0],
-	# 		[0,   1,         0, 0],
-	# 		[0,   0,         1, 0],
-	# 		[0,   0,-1/self._f, 0],
-	# 	])
-
 	def projection(self, z=None) -> np.array:
 		if z is None:
 			return np.array([
