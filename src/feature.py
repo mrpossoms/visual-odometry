@@ -89,15 +89,16 @@ class Feature3D:
 
 class Feature2D:
 	def __init__(self, camera: Pinhole, keypoints: list[cv2.KeyPoint], poses: list[np.array]):
-		assert(len(keypoints) >= 2)
-		assert(len(poses) >= 2)
+		assert(len(keypoints) >= 1)
+		assert(len(poses) >= 1)
 
 		self._cam = camera
 		self._keypoints = keypoints
 		self._poses = poses
+		self._point_estimate = None
 
 		x, y = keypoints[-1].pt[0], keypoints[-1].pt[1]
-		dx, dy = x - keypoints[-2].pt[0], y - keypoints[-2].pt[1]
+		dx, dy = 0, 0 #x - keypoints[-2].pt[0], y - keypoints[-2].pt[1]
 		x0 = vec(x, y, dx, dy, 0, 0)
 		assert(x0 is not None)
 
@@ -116,8 +117,8 @@ class Feature2D:
 				[1, 0, 0, 0, 0, 0],
 				[0, 1, 0, 0, 0, 0],
 			]),
-			Q=I * 0.1, # proc noise TDB
-			R=np.eye(2) * 2, # meas noise TDB
+			Q=I, # proc noise TDB
+			R=np.eye(2) * 0.5, # meas noise TDB
 			P=I * 4, # state est covar TDB
 			x0=x0
 			)
@@ -131,6 +132,21 @@ class Feature2D:
 		b = semi_minor_axes[1]
 
 		return centroid, a, b
+
+	def candidate_keypoint(self, keypoint: cv2.KeyPoint) -> bool:
+		# Use the state estimate covariance to project an ellipse into the sensor's xy plane
+		# use that ellipse to determine if a keypoint should be considered part of this feature
+		centroid, a, b = self.covariance_ellipse()
+
+		if centroid is None:
+			return False
+
+		a_sqr, b_sqr = a ** 2, b ** 2
+
+		delta_sqr = (np.array(keypoint.pt) - centroid) ** 2
+		r = (delta_sqr[0] / a_sqr) + (delta_sqr[1] / b_sqr)
+
+		return r < 1
 
 	def filter_keypoints(self, keypoint: cv2.KeyPoint): #-> Generator[cv2.KeyPoint]:
 		# Use the state estimate covariance to project an ellipse into the sensor's xy plane
@@ -149,25 +165,34 @@ class Feature2D:
 		if r < 2: # then the keypoint is inside the ellipse
 			yield keypoint
 
+	def predict(self):
+		self._kf.predict(vec(0))		
+
 	def update(self, keypoint: cv2.KeyPoint, pose: np.array):
-		
-		self._kf.predict(vec(0)) 
-		# self._kf.x[3] = 1
-
-		# my_keypoints = self.filter_keypoints(keypoints)
-
 		if keypoint is not None:
-			# self._kf.H = self._cam.projection(z=x) # Update the projection matrix
-			# self._kf.x[3] = 1
 			self._kf.update(keypoint.pt)
 
-		self._keypoints.append(keypoint)
+		x = self._kf.x
 
-		return self._kf.x
+		self._keypoints.append(keypoint)
+		self._poses.append(pose)
+
+		# This could probably be made better by storing the previous point estimate and computing the difference between positions
+		# instead of using the instantaneous velocity
+		p_prime = point_from_motion(self._cam, x[:2] - x[2:4], x[:2], self._poses[-2], self._poses[-1])
+
+		if p_prime is not None:
+			if self._point_estimate is not None:
+				a = 1 # this could probably be made smarter by using the covariance of the state estimate
+				self._point_estimate = p_prime * a + self._point_estimate * (1-a)
+			else:
+				self._point_estimate = p_prime
+
+		return self._point_estimate
 
 	def expiring(self) -> bool:
 		# Check the magnitude of the state estimate covariance
-		return np.linalg.norm(self._kf.P.diagonal()[:2]) > 10
+		return np.linalg.norm(self._kf.P.diagonal()[:2]) > 5
 
 class DummyKp:
 	def __init__(self, pt):

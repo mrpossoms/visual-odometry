@@ -31,6 +31,9 @@ class Pinhole:
 			])
 
 	def project_onto_sensor(self, p: np.array) -> np.array:
+		if p[2] <= 0:
+			return None
+
 		# project 3d point onto sensor plane to get pixel coordinates
 		p_prime = np.matmul(self._cam_transform, np.append(p, [1]))
 
@@ -66,6 +69,16 @@ class Pinhole:
 			self._sensor[sensor_coord[1], sensor_coord[0]] = c
 
 		return sensor_coord
+
+	def draw_mesh(self, verts, colors, tris):
+
+		for tri in tris:
+			tri_verts = verts[tri]
+			tri_colors = colors[tri]
+			pts = [self.project(v, c).astype(np.int) for v, c in zip(tri_verts, tri_colors)]
+
+			#draw the triangle as a series of lines
+
 
 	def set_transform(self, transform: np.array):
 		self._world_transform = transform
