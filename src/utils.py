@@ -85,7 +85,9 @@ def xform(v, M):
 	return np.matmul(M, v_aug)[:3]
 
 def basis(forward, up):
-	right = np.cross(forward / np.linalg.norm(forward), up / np.linalg.norm(up))
+	forward /= np.linalg.norm(forward)
+	up /= np.linalg.norm(up)
+	right = np.cross(forward, up)
 	up = np.cross(forward, -right)
 	return np.array([
 		np.append(right, 0),
@@ -112,107 +114,63 @@ def cube(d=1, position=vec(0,0,0), color_for_coord=None):
 					cc.append(color_for_coord(vec(x,y,z)))
 	return cv, cc
 
-def line_samples(p1, p2): #  -> list[tuple(int,int,float)]:
-	# draw a line from p1 to p2
-	# with color interpolation
-	# p1, p2 are 2d pixel coordinates
-	# color1, color2 are 3d color values
-	# we'll interpolate between them
-	# and draw the line
-	# Bresenham's line algorithm
-	x0, y0 = p1
-	x1, y1 = p2
-	x, y = x0, y0
-	dx = abs(x1 - x0)
-	dy = abs(y1 - y0)
-	sx = 1 if x0 < x1 else -1
-	sy = 1 if y0 < y1 else -1
-	err = dx - dy
-
-	samples = []
-
-	d = abs(x1 - x0) + abs(y1 - y0)
-	while True:
-		# draw the pixel
-		# with color interpolation
-		# between color1 and color2
-		# at the current position
-		t = abs(x1 - x) + abs(y1 - y)
-		samples.append((x, y, t / d))
-
-		if x == x1 and y == y1:
-			break
-
-		e2 = 2 * err
-		if e2 > -dy:
-			err -= dy
-			x += sx
-		if e2 < dx:
-			err += dx
-			y += sy
-
-	return samples
-
-def line(I, p1, p2, color1, color2):
-	# draw a line from p1 to p2
-	# with color interpolation
-	# p1, p2 are 2d pixel coordinates
-	# color1, color2 are 3d color values
-	# we'll interpolate between them
-	# and draw the line
-	# Bresenham's line algorithm
-	x0, y0 = p1
-	x1, y1 = p2
-	x, y = x0, y0
-	dx = abs(x1 - x0)
-	dy = abs(y1 - y0)
-	sx = 1 if x0 < x1 else -1
-	sy = 1 if y0 < y1 else -1
-	err = dx - dy
-
-	d = abs(x1 - x0) + abs(y1 - y0)
-	while True:
-		# draw the pixel
-		# with color interpolation
-		# between color1 and color2
-		# at the current position
-		t = abs(x1 - x) + abs(y1 - y)
-		I[y, x] = color1 #(color1 * (t / d) + color2 * (1 - t / d))
-
-		if x == x1 and y == y1:
-			break
-
-		e2 = 2 * err
-		if e2 > -dy:
-			err -= dy
-			x += sx
-		if e2 < dx:
-			err += dx
-			y += sy
-
-def triangle(I, points, color):
-	center = np.average(points, axis=0)
+def triangle(I, D, screen_points, tri_indices, verts, data, shader=None):
 	m = [
-		(points[0] + points[1]) / 2,
-		(points[1] + points[2]) / 2,
-		(points[2] + points[0]) / 2,
+		(screen_points[0] + screen_points[1]) / 2,
+		(screen_points[1] + screen_points[2]) / 2,
+		(screen_points[2] + screen_points[0]) / 2,
 	]
 	e = [
-		points[1] - points[0],
-		points[2] - points[1],
-		points[0] - points[2],
+		screen_points[1] - screen_points[0],
+		screen_points[2] - screen_points[1],
+		screen_points[0] - screen_points[2],
 	]
-	corner_max = points.max(axis=0)
-	corner_min = points.min(axis=0)
-
+	corner_max = screen_points.max(axis=0)
+	corner_min = screen_points.min(axis=0)
 	n = [
 		vec(e[0][1], -e[0][0]),
 		vec(e[1][1], -e[1][0]),
 		vec(e[2][1], -e[2][0]),
 	]
 
-	for y in range(corner_min[1], corner_max[1]):
-		for x in range(corner_min[0], corner_max[0]):
-			p = vec(x, y)
-			if np.dot(n[0], p - m[0]) > 0 and np.dot(n[1], p - m[1]) > 0 and np.dot(n[2], p - m[2]) > 0:
-				I[y, x] = color
+	x1, y1 = screen_points[0]
+	x2, y2 = screen_points[1]
+	x3, y3 = screen_points[2]
+
+	B = np.array([
+		[x2*y3 - x3*y2, y2 - y3, x3 - x2],
+		[x3*y1 - x1*y3, y3 - y1, x1 - x3],
+		[x1*y2 - x2*y1, y1 - y2, x2 - x1],
+	]) / (x1 * (y2-y3) + x2 * (y3-y1) + x3 * (y1-y2))
+
+	for y in range(max(0, corner_min[1]), min(corner_max[1], I.shape[0]-1)):
+		for x in range(max(0, corner_min[0]), min(corner_max[0], I.shape[1]-1)):
+			p = vec(x,y)
+			if np.dot(n[0], p -m[0]) >= 0 and np.dot(n[1], p - m[1]) >= 0 and np.dot(n[2], p - m[2]) >= 0:
+				u, v, w = B @ vec(1, x, y)
+
+				z = u * verts[0][2] + v * verts[1][2] + w * verts[2][2]
+				if z < D[y,x]:
+					D[y, x] = z
+					if shader is not None:
+						I[y, x] = shader(screen_points, tri_indices, u, v, w, data)
+					else:
+						I[y, x] = colors[0] * u + colors[1] * v + colors[2] * w
+
+def tri_mesh(I, D, camera=None, verts=None, indices=None, data=None, shader=None, model=np.eye(4)):
+	# assert(len(verts) == len(colors))
+	assert(verts is not None)
+
+	if indices is not None:
+		assert(len(indices) % 3 == 0)
+		for i in range(0, len(indices), 3):
+			tri_inds = indices[i:i+3]
+			points = np.array([camera.project_onto_sensor(xform(v, model)) for v in verts[tri_inds]])
+			if None in points:
+				return
+			triangle(I, D, points, tri_inds, verts[tri_inds], data, shader=shader)
+	else:
+		assert(len(verts) % 3 == 0)
+		for vi in range(0, len(verts), 3):
+			points = np.array([camera.project_onto_sensor(v) for v in verts[vi:vi+3]])
+			triangle(I, D, points, [vi,vi+1,vi+2], verts[vi:vi+3], data, shader=shader)

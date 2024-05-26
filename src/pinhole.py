@@ -31,11 +31,11 @@ class Pinhole:
 			])
 
 	def project_onto_sensor(self, p: np.array) -> np.array:
-		if p[2] <= 0:
-			return None
-
-		# project 3d point onto sensor plane to get pixel coordinates
+		# transform point into view space
 		p_prime = np.matmul(self._cam_transform, np.append(p, [1]))
+
+		if p_prime[2] <= 0:
+			return None
 
 		P = self.projection(z=p_prime[2])
 		sensor_plane_pos = None
@@ -55,15 +55,15 @@ class Pinhole:
 
 		sensor_coord = ((sensor_plane_pos - self._sensor_extents[0]) / self.sensor_dims) * np.array(self._sensor.shape[:2])
 
-		# bounds check
-		if ((sensor_coord[0] < 0 or sensor_coord[1] < 0) or
-		    (sensor_coord[0] >= self._sensor.shape[0] or sensor_coord[1] >= self._sensor.shape[1])):
-			return None
-
 		return sensor_coord.astype(int)
 
 	def project(self, p: np.array, c: np.array):
 		sensor_coord = self.project_onto_sensor(p)
+
+		# bounds check
+		if ((sensor_coord[0] < 0 or sensor_coord[1] < 0) or
+		    (sensor_coord[0] >= self._sensor.shape[0] or sensor_coord[1] >= self._sensor.shape[1])):
+			return None
 
 		if sensor_coord is not None and c is not None:
 			self._sensor[sensor_coord[1], sensor_coord[0]] = c
